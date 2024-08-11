@@ -2,10 +2,12 @@
 #include <unistd.h>
 #include <cstring>
 #include <cstdint>
+#include <sys/mman.h>
 
 #define MAX_SIZE 100000000
 #define MAX_ORDER 10
 #define MIN_BLOCK_SIZE 128
+#define MAX_BLOCK_SIZE MIN_BLOCK_SIZE << MAX_ORDER
 #define TOT_BLOCKS_SIZE 4194304
 
 struct MallocMetadata
@@ -40,7 +42,7 @@ struct LevelManager{
 };
 
 struct BlockManager{ 
-    LevelManager level_manager[MAX_ORDER + 1];
+    LevelManager level_manager[MAX_ORDER + 2];
     size_t num_free_blocks;
     size_t num_free_bytes;
     size_t num_allocated_blocks;
@@ -49,7 +51,7 @@ struct BlockManager{
     size_t size_meta_data;
 
     BlockManager() : num_free_blocks(0), num_free_bytes(0), num_allocated_blocks(0), num_allocated_bytes(0), num_meta_data_bytes(0), size_meta_data(sizeof(MallocMetadata)) {
-        for (int i = 0; i < MAX_ORDER + 1; i++)
+        for (int i = 0; i < MAX_ORDER + 2; i++)
         {
             level_manager[i].head = NULL;
         }
@@ -78,6 +80,7 @@ struct BlockManager{
         {
             metadata = (MallocMetadata*)current_brk;
             MallocMetadata::metadata_init_block(metadata, max_block_size);
+            add_new_block(metadata);
 
             current_brk = (char*)current_brk + max_block_size;
         }
@@ -110,7 +113,7 @@ struct BlockManager{
     private:
     MallocMetadata* _get_buddy(MallocMetadata* metadata)
     {
-        uintptr_t buddy_addr = (uintptr_t)metadata ^ metadata->block_size; // TODO check that the conversion is valid
+        uintptr_t buddy_addr = ((uintptr_t)metadata) ^ (metadata->block_size); // TODO check that the conversion is valid
         return (MallocMetadata *)buddy_addr;
     }
 
@@ -124,7 +127,14 @@ struct BlockManager{
 
         if ((1 << result) < size)
             ++result;
-        return result - 7 < 0 ? 0 : result - 7;
+        
+        result = result - 7;
+        if (result < 0)
+             return 0;
+        if (result > MAX_ORDER)
+            return 11;
+
+        return result;
     }
 
     void _insert(MallocMetadata* metadata)
@@ -151,6 +161,7 @@ struct BlockManager{
                     if (metadata->next != NULL)
                         metadata->next->prev = metadata;
                 }
+                iter = iter ->next;
             }
         }
     }
@@ -182,7 +193,7 @@ struct BlockManager{
     MallocMetadata *find_free_block(size_t size)
     {
         MallocMetadata* found_block;
-        size_t lvl = _calc_lvl(size + sizeof(MallocMetadata));
+        size_t lvl = _calc_lvl(size);
         size_t found_lvl = lvl + 1;
         MallocMetadata* tight_block;
 
@@ -221,9 +232,6 @@ struct BlockManager{
 
         size_t lvl = _calc_lvl(metadata->block_size);
 
-        if (lvl > MAX_ORDER) //TODO change later
-            return;
-        
         _insert(metadata);
         data_add_block(metadata);
     }
@@ -235,7 +243,6 @@ struct BlockManager{
         
         _remove(metadata);
         data_remove_block(metadata);
-            
     }
 
     void mark_free_bin_block(MallocMetadata *metadata)
@@ -271,8 +278,8 @@ struct BlockManager{
             _remove(metadata);
         
 
-        buddy_metadata  = _get_buddy(metadata);
         MallocMetadata::metadata_init_block(metadata, new_block_size);
+        buddy_metadata  = _get_buddy(metadata);
         MallocMetadata::metadata_init_block(buddy_metadata,new_block_size);
 
         if (is_free == false){
@@ -310,12 +317,13 @@ struct BlockManager{
         data_remove_block(metadata);
         data_remove_block(buddy_metadata);
 
-        MallocMetadata::metadata_init(new_metadata,new_block_size);
+        MallocMetadata::metadata_init_block(new_metadata,new_block_size);
 
         if (is_free == false)
             new_metadata->is_free = false;
         
         data_add_block(new_metadata);
+        return new_metadata;
     }
 
 };
@@ -329,20 +337,32 @@ void* smalloc(size_t size)
     static bool to_alloc = true;
     if (to_alloc){
         manager.init();
-        
+        to_alloc = false;
     }
+    
     if (size == 0 || size > MAX_SIZE)
         return NULL;
     
     MallocMetadata* metadata;
-    void *base_addr, *data_addr ;
+    size_t needed_size = size + sizeof(MallocMetadata);
+    void *metadata_addr, *data_addr ;
 
-    if (size > (MIN_BLOCK_SIZE << MAX_ORDER)) // handle with mmap
+    if (needed_size > MAX_BLOCK_SIZE) // handle with mmap
     {
+        metadata_addr = mmap(NULL, needed_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (metadata_addr == MAP_FAILED)
+            return NULL;
 
+        metadata = (MallocMetadata*)metadata_addr;
+        MallocMetadata::metadata_init_block(metadata, needed_size);
+        metadata->is_free = false;
+        manager.add_new_block(metadata);
+
+        data_addr = (char*)metadata_addr + sizeof(MallocMetadata);
+        return data_addr;
     }
 
-    metadata = manager.find_free_block(size);
+    metadata = manager.find_free_block(needed_size);
     if (metadata == NULL)
         return NULL;
     
@@ -355,27 +375,35 @@ void* smalloc(size_t size)
 
 void* scalloc(size_t num, size_t size)
 {
-    // void* data_addr = smalloc(size*num);
-    // if (data_addr == NULL)
-    //     return NULL;
+    void* data_addr = smalloc(size*num);
+    if (data_addr == NULL)
+        return NULL;
     
-    // std::memset(data_addr, 0, size*num);
-    // return data_addr;
-return NULL;
+    std::memset(data_addr, 0, size*num);
+    return data_addr;
 }
 
 void sfree(void* p)
 {
-    // if (p == NULL)
-    //     return;
+    if (p == NULL)
+        return;
 
-    // void* metadata_addr = (char*)p - sizeof(MallocMetadata);
-    // MallocMetadata* metadata = (MallocMetadata*)metadata_addr;
+    void* metadata_addr = (char*)p - sizeof(MallocMetadata);
+    MallocMetadata* metadata = (MallocMetadata*)metadata_addr;
 
-    // if (metadata->is_free)
-    //     return;
+    if (metadata->is_free)
+        return;
 
-    // manager.mark_free(metadata);
+    if (metadata->block_size > MAX_BLOCK_SIZE) // handle with mmap
+    {
+        manager.delete_block(metadata);
+        munmap(metadata, metadata->block_size);
+
+        return;
+    }
+    manager.mark_free_bin_block(metadata);
+    while ((metadata = manager.join_block_to_buddy(metadata)) != NULL);
+    
 }
 
 void* srealloc(void* oldp, size_t size)
@@ -452,6 +480,10 @@ size_t _size_meta_data()
 
 int main(int argc, char const *argv[])
 {
-    smalloc(50);
+    void* ptr1, *ptr2;
+    ptr1 = smalloc(131072);
+    ptr2 = smalloc(131072);
+    sfree(ptr1);
+    sfree(ptr2);
     return 0;
 }
