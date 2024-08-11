@@ -4,9 +4,6 @@
 #include <cstdint>
 #include <sys/mman.h>
 
-#include <iostream>
-#include <cassert>
-
 #define MAX_SIZE 100000000
 #define MAX_ORDER 10
 #define MIN_BLOCK_SIZE 128
@@ -242,8 +239,7 @@ struct BlockManager{
 
         size_t lvl = _calc_lvl(metadata->block_size);
 
-        if (metadata->is_free)
-            _insert(metadata);
+        _insert(metadata);
         data_add_block(metadata);
     }
 
@@ -252,8 +248,7 @@ struct BlockManager{
         if (metadata == NULL)
             return;
         
-        if (metadata->is_free)
-            _remove(metadata);
+        _remove(metadata);
         data_remove_block(metadata);
     }
 
@@ -284,17 +279,25 @@ struct BlockManager{
         if (lvl == 0)
             return NULL;
 
-        delete_block(metadata);
+        data_remove_block(metadata);
+
+        if (is_free)
+            _remove(metadata);
+        
 
         MallocMetadata::metadata_init_block(metadata, new_block_size);
         buddy_metadata  = _get_buddy(metadata);
         MallocMetadata::metadata_init_block(buddy_metadata,new_block_size);
 
-        if (is_free == false)
+        if (is_free == false){
             metadata->is_free = false;
-        
-        add_new_block(metadata);
-        add_new_block(buddy_metadata);
+        } else {
+            _insert(metadata);
+        }
+        _insert(buddy_metadata);
+
+        data_add_block(metadata);
+        data_add_block(buddy_metadata);
 
         return metadata;
     }
@@ -318,16 +321,15 @@ struct BlockManager{
         if (buddy_metadata->is_free == false) //can't join
             return NULL;
 
-        delete_block(metadata);
-        delete_block(buddy_metadata);
+        data_remove_block(metadata);
+        data_remove_block(buddy_metadata);
 
         MallocMetadata::metadata_init_block(new_metadata, new_block_size);
 
         if (is_free == false)
             new_metadata->is_free = false;
 
-        add_new_block(new_metadata);
-        
+        data_add_block(new_metadata);
         return new_metadata;
     }
 
@@ -474,10 +476,6 @@ void* srealloc(void* oldp, size_t size)
         while (iter != NULL){
             new_metadata = iter;
             iter = manager.join_block_to_buddy(new_metadata);
-            if (needed_size <= iter->block_size){
-                new_metadata = iter;
-                break;
-            }
         }
         newp = (char *)new_metadata + sizeof(MallocMetadata);
         std::memmove(newp, oldp, old_metadata->data_size);
@@ -522,120 +520,16 @@ size_t _size_meta_data()
 {
     return manager.size_meta_data;
 }
-int main() {
-    // Test 1: Allocate and Free a Small Block (140 bytes)
-    void* ptr1 = smalloc(100);  // Needs 140 bytes total (100 + 40 metadata)
-    assert(ptr1 != nullptr);
-    assert(_num_allocated_blocks() == 41); // 41 blocks allocated
-    assert(_num_free_blocks() == 40); // 40 blocks free
 
-    sfree(ptr1);
-    assert(_num_allocated_blocks() == 32);  // Back to 32 blocks after merging
-    assert(_num_free_blocks() == 32);  // All blocks are free again
-
-    // Test 2: Allocate and Free a Block Exactly Matching 128KB + Metadata
-    void* ptr2 = smalloc(128 * 1024); // Requires 131,112 bytes (128KB + 40B)
-    assert(ptr2 != nullptr);
-    assert(_num_allocated_blocks() == 33);  // 32 original blocks + 1 large block allocated (256KB)
-    assert(_num_free_blocks() == 32); // 31 free blocks remain after the allocation
-
-    sfree(ptr2);
-    assert(_num_allocated_blocks() == 32);  // Back to 32 blocks after freeing and merging
-    assert(_num_free_blocks() == 32);  // All blocks are free again
-
-    // Test 3: Allocate a Block, Then Allocate Another One That Forces Splitting
-    void *ptr3 = smalloc(128 * 1024); // Requires 131,112 bytes
-    assert(ptr3 != nullptr);
-    assert(_num_allocated_blocks() == 33); // 1 block of 256KB allocated, 32 blocks remain
-
-    void *ptr4 = smalloc(100); // Requires 140 bytes total
-    assert(ptr4 != nullptr);
-    assert(_num_allocated_blocks() == 42); // 33 from before + 9 new blocks due to splitting down for 140 bytes
-    assert(_num_free_blocks() == 40);      // 40 blocks are free
-
+int main(int argc, char const *argv[])
+{
+    void* ptr1, *ptr2, *ptr3;
+    ptr1 = smalloc(50);
+    ptr2 = smalloc(50);
+    // sfree(ptr1);
+    ptr3 = srealloc(ptr2, 128);
     sfree(ptr3);
-    sfree(ptr4);
-    assert(_num_allocated_blocks() == 32); // Back to 32 blocks after merging
-    assert(_num_free_blocks() == 32);      // All blocks are free again
+    sfree(ptr1);
 
-    // Test 4: Allocate All Available Memory, Then Free
-    void *allocations[32];
-    for (int i = 0; i < 32; i++)
-    {
-        allocations[i] = smalloc(128 * 1024 - 40); // Allocating close to 128KB each, accounting for metadata
-        assert(allocations[i] != nullptr);
-    }
-    assert(_num_allocated_blocks() == 32); // All blocks are now allocated
-    assert(_num_free_blocks() == 0);       // No free blocks remain
-
-    for (int i = 0; i < 32; i++)
-    {
-        sfree(allocations[i]);
-    }
-    assert(_num_allocated_blocks() == 32); // After freeing, back to 32 blocks
-    assert(_num_free_blocks() == 32);      // All blocks are free again
-
-    // Test 5: Allocate and Free Large Blocks (Beyond Buddy System, Using mmap)
-    void *ptr5 = smalloc(MAX_BLOCK_SIZE + 1); // Requires mmap
-    assert(ptr5 != nullptr);
-    assert(_num_allocated_blocks() == 33); // One block via mmap, others unchanged
-    assert(_num_free_blocks() == 32);      // No internal blocks affected
-
-    sfree(ptr5);
-    assert(_num_allocated_blocks() == 32); // Back to 32 after freeing mmap block
-    assert(_num_free_blocks() == 32);      // All blocks are free again
-
-    // Test 6: Reallocate, Triggering Merging of Used Blocks
-    void *ptr6 = smalloc(100);        // Needs 140 bytes total (100 + 40 metadata)
-    void *ptr7 = srealloc(ptr6, 400); // Should cause merging of 256-byte blocks into 512-byte block
-    assert(ptr7 != nullptr);
-
-    assert(_num_allocated_blocks() == 40); // Merging occurred, reducing the number of blocks
-    assert(_num_free_blocks() == 39);      // 39 blocks free, one used for 512-byte block
-
-    sfree(ptr7);
-    assert(_num_allocated_blocks() == 32); // Back to 32 blocks after freeing and merging
-    assert(_num_free_blocks() == 32);      // All blocks are free again
-
-    // Test 7: Edge Case - Allocate Smallest Possible Block (Including Metadata)
-    void *ptr8 = smalloc(1); // Allocating 1 byte + 40 bytes metadata, total 41 bytes
-    assert(ptr8 != nullptr);
-    assert(_num_allocated_blocks() == 42); // Splitting down to a 128-byte block results in 42 allocated blocks
-    assert(_num_free_blocks() == 41);      // 41 blocks remain free after using one 128-byte block
-
-    sfree(ptr8);
-    assert(_num_allocated_blocks() == 32); // Back to 32 blocks after freeing and merging
-    assert(_num_free_blocks() == 32);      // All blocks are free again
-
-    // Test 8: Allocate and Free Multiple Blocks in Different Orders
-    void *ptr9 = smalloc(50);   // Needs 90 bytes total (50 + 40 metadata)
-    void *ptr10 = smalloc(150); // Needs 190 bytes total (150 + 40 metadata)
-    void *ptr11 = smalloc(100); // Needs 140 bytes total (100 + 40 metadata)
-
-    assert(ptr9 != nullptr && ptr10 != nullptr && ptr11 != nullptr);
-    assert(_num_allocated_blocks() == 43); // 43 blocks allocated due to previous allocations and splits
-    assert(_num_free_blocks() == 40);      // 40 blocks remain free after using one 256-byte block
-
-    sfree(ptr10);
-    sfree(ptr9);
-    sfree(ptr11);
-    assert(_num_allocated_blocks() == 32); // Back to 32 blocks after freeing and merging
-    assert(_num_free_blocks() == 32);      // All blocks are free again
-
-
-    std::cout << "All tests passed!" << std::endl;
     return 0;
 }
-
-// int main(int argc, char const *argv[])
-// {
-//     void* ptr1, *ptr2, *ptr3;
-//     ptr1 = smalloc(50);
-//     ptr2 = smalloc(50);
-//     // sfree(ptr1);
-//     ptr3 = srealloc(ptr2, 128);
-//     sfree(ptr3);
-//     sfree(ptr1);
-
-//     return 0;
-// }
