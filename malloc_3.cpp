@@ -89,28 +89,161 @@ struct BlockManager{
         }
     }
 
-    void data_add_block(MallocMetadata* metadata)
+    // return NULL if didn't find
+    MallocMetadata *find_free_block(size_t size)
     {
-        if (metadata->is_free){
-            ++num_free_blocks;
-            num_free_bytes += metadata->data_size;
+        MallocMetadata* found_block;
+        size_t lvl = _calc_lvl(size);
+        size_t found_lvl = lvl + 1;
+        MallocMetadata* tight_block;
+
+        if (lvl > MAX_ORDER) // TODO change later
+            return NULL;
+        
+        found_block = level_manager[lvl].head;
+        if (found_block != NULL)
+            return found_block;
+        
+
+        while (found_lvl <= MAX_ORDER)
+        {
+            found_block = level_manager[found_lvl].head;
+            if (found_block != NULL)
+                break;
+
+            ++found_lvl;
         }
-        ++num_allocated_blocks;
-        num_allocated_bytes += metadata->data_size;
-        num_meta_data_bytes += sizeof(MallocMetadata);
+        if (found_block == NULL)
+            return NULL;
+        
+        for (size_t i = lvl; i < found_lvl; i++)
+        {
+            tight_block = split_block(found_block);
+        }
+        
+
+        return tight_block;
     }
-    void data_remove_block(MallocMetadata* metadata)
+
+    void add_new_block(MallocMetadata *metadata)
     {
-        if (metadata->is_free){
-            --num_free_blocks;
-            num_free_bytes -= metadata->data_size;
-        }
-        --num_allocated_blocks;
-        num_allocated_bytes -= metadata->data_size;
-        num_meta_data_bytes -= sizeof(MallocMetadata);
+        if (metadata == NULL)
+            return;
+
+        size_t lvl = _calc_lvl(metadata->block_size);
+
+        if (metadata->is_free)
+            _insert(metadata);
+        _data_add_block(metadata);
+    }
+
+    void delete_block(MallocMetadata *metadata)
+    {
+        if (metadata == NULL)
+            return;
+        
+        if (metadata->is_free)
+            _remove(metadata);
+        _data_remove_block(metadata);
+    }
+
+    void mark_free_bin_block(MallocMetadata *metadata)
+    {
+        metadata->is_free = true;
+        _insert(metadata);
+        ++num_free_blocks;
+        num_free_bytes += metadata->data_size;
+    }
+
+    void mark_alloc_bin_block(MallocMetadata *metadata)
+    {
+        metadata->is_free = false;
+        _remove(metadata);
+        --num_free_blocks;
+        num_free_bytes -= metadata->data_size;
+    }
+
+    MallocMetadata* split_block(MallocMetadata* metadata)
+    {
+        MallocMetadata* buddy_metadata;
+        bool is_free = metadata->is_free;
+        size_t block_size = metadata->block_size;
+        size_t new_block_size = block_size >> 1;
+        size_t lvl = _calc_lvl(block_size);
+
+        if (lvl == 0)
+            return NULL;
+
+        delete_block(metadata);
+
+        MallocMetadata::metadata_init_block(metadata, new_block_size);
+        buddy_metadata  = _get_buddy(metadata);
+        MallocMetadata::metadata_init_block(buddy_metadata,new_block_size);
+
+        if (is_free == false)
+            metadata->is_free = false;
+        
+        add_new_block(metadata);
+        add_new_block(buddy_metadata);
+
+        return metadata;
     }
 
 
+    MallocMetadata* join_block_to_buddy(MallocMetadata* metadata)
+    {
+        MallocMetadata* buddy_metadata;
+        MallocMetadata* new_metadata;
+
+        bool is_free = metadata->is_free;
+        size_t block_size = metadata->block_size;
+        size_t new_block_size = metadata->block_size << 1;
+        size_t lvl = _calc_lvl(block_size);
+
+        if (lvl >= MAX_ORDER)
+            return NULL;
+
+        buddy_metadata = _get_buddy(metadata);
+        new_metadata = buddy_metadata > metadata ? metadata : buddy_metadata;
+
+        if (buddy_metadata->is_free == false) //can't join
+            return NULL;
+
+        delete_block(metadata);
+        delete_block(buddy_metadata);
+
+        MallocMetadata::metadata_init_block(new_metadata, new_block_size);
+
+        if (is_free == false)
+            new_metadata->is_free = false;
+
+        add_new_block(new_metadata);
+        
+        return new_metadata;
+    }
+
+    size_t check_max_block_size_after_joins(MallocMetadata* metadata)
+    {
+        MallocMetadata* buddy_metadata;
+        MallocMetadata* new_metadata = metadata;
+
+        size_t max_block_size = metadata->block_size;
+        size_t new_block_size = max_block_size;
+
+        while (true)
+        {
+            size_t lvl = _calc_lvl(new_block_size);
+            buddy_metadata = _do_get_buddy(new_metadata, new_block_size);
+        if (lvl > MAX_ORDER || buddy_metadata->is_free == false) //can't join
+        {
+            return max_block_size;
+        }
+
+            max_block_size = new_block_size;
+            new_metadata = buddy_metadata > new_metadata ? new_metadata : buddy_metadata;
+            new_block_size <<= 1;
+        }
+    }
 
 
     private:
@@ -198,161 +331,27 @@ struct BlockManager{
         metadata->prev = metadata->next = NULL; // unnaccesary but feels right
     }
 
-    public:
-    // return NULL if didn't find
-    MallocMetadata *find_free_block(size_t size)
+    void _data_add_block(MallocMetadata* metadata)
     {
-        MallocMetadata* found_block;
-        size_t lvl = _calc_lvl(size);
-        size_t found_lvl = lvl + 1;
-        MallocMetadata* tight_block;
-
-        if (lvl > MAX_ORDER) // TODO change later
-            return NULL;
-        
-        found_block = level_manager[lvl].head;
-        if (found_block != NULL)
-            return found_block;
-        
-
-        while (found_lvl <= MAX_ORDER)
-        {
-            found_block = level_manager[found_lvl].head;
-            if (found_block != NULL)
-                break;
-
-            ++found_lvl;
+        if (metadata->is_free){
+            ++num_free_blocks;
+            num_free_bytes += metadata->data_size;
         }
-        if (found_block == NULL)
-            return NULL;
-        
-        for (size_t i = lvl; i < found_lvl; i++)
-        {
-            tight_block = split_block(found_block);
+        ++num_allocated_blocks;
+        num_allocated_bytes += metadata->data_size;
+        num_meta_data_bytes += sizeof(MallocMetadata);
+    }
+    void _data_remove_block(MallocMetadata* metadata)
+    {
+        if (metadata->is_free){
+            --num_free_blocks;
+            num_free_bytes -= metadata->data_size;
         }
-        
-
-        return tight_block;
+        --num_allocated_blocks;
+        num_allocated_bytes -= metadata->data_size;
+        num_meta_data_bytes -= sizeof(MallocMetadata);
     }
 
-    void add_new_block(MallocMetadata *metadata)
-    {
-        if (metadata == NULL)
-            return;
-
-        size_t lvl = _calc_lvl(metadata->block_size);
-
-        if (metadata->is_free)
-            _insert(metadata);
-        data_add_block(metadata);
-    }
-
-    void delete_block(MallocMetadata *metadata)
-    {
-        if (metadata == NULL)
-            return;
-        
-        if (metadata->is_free)
-            _remove(metadata);
-        data_remove_block(metadata);
-    }
-
-    void mark_free_bin_block(MallocMetadata *metadata)
-    {
-        metadata->is_free = true;
-        _insert(metadata);
-        ++num_free_blocks;
-        num_free_bytes += metadata->data_size;
-    }
-
-    void mark_alloc_bin_block(MallocMetadata *metadata)
-    {
-        metadata->is_free = false;
-        _remove(metadata);
-        --num_free_blocks;
-        num_free_bytes -= metadata->data_size;
-    }
-
-    MallocMetadata* split_block(MallocMetadata* metadata)
-    {
-        MallocMetadata* buddy_metadata;
-        bool is_free = metadata->is_free;
-        size_t block_size = metadata->block_size;
-        size_t new_block_size = block_size >> 1;
-        size_t lvl = _calc_lvl(block_size);
-
-        if (lvl == 0)
-            return NULL;
-
-        delete_block(metadata);
-
-        MallocMetadata::metadata_init_block(metadata, new_block_size);
-        buddy_metadata  = _get_buddy(metadata);
-        MallocMetadata::metadata_init_block(buddy_metadata,new_block_size);
-
-        if (is_free == false)
-            metadata->is_free = false;
-        
-        add_new_block(metadata);
-        add_new_block(buddy_metadata);
-
-        return metadata;
-    }
-
-    MallocMetadata* join_block_to_buddy(MallocMetadata* metadata)
-    {
-        MallocMetadata* buddy_metadata;
-        MallocMetadata* new_metadata;
-
-        bool is_free = metadata->is_free;
-        size_t block_size = metadata->block_size;
-        size_t new_block_size = metadata->block_size << 1;
-        size_t lvl = _calc_lvl(block_size);
-
-        if (lvl >= MAX_ORDER)
-            return NULL;
-
-        buddy_metadata = _get_buddy(metadata);
-        new_metadata = buddy_metadata > metadata ? metadata : buddy_metadata;
-
-        if (buddy_metadata->is_free == false) //can't join
-            return NULL;
-
-        delete_block(metadata);
-        delete_block(buddy_metadata);
-
-        MallocMetadata::metadata_init_block(new_metadata, new_block_size);
-
-        if (is_free == false)
-            new_metadata->is_free = false;
-
-        add_new_block(new_metadata);
-        
-        return new_metadata;
-    }
-
-    size_t check_max_block_size_after_joins(MallocMetadata* metadata)
-    {
-        MallocMetadata* buddy_metadata;
-        MallocMetadata* new_metadata = metadata;
-
-        size_t max_block_size = metadata->block_size;
-        size_t new_block_size = max_block_size;
-
-        while (true)
-        {
-            size_t lvl = _calc_lvl(new_block_size);
-            buddy_metadata = _do_get_buddy(new_metadata, new_block_size);
-        if (lvl > MAX_ORDER || buddy_metadata->is_free == false) //can't join
-        {
-            return max_block_size;
-        }
-
-            max_block_size = new_block_size;
-            new_metadata = buddy_metadata > new_metadata ? new_metadata : buddy_metadata;
-            new_block_size <<= 1;
-        }
-    }
 
 };
 
