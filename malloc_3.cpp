@@ -449,10 +449,6 @@ void* srealloc(void* oldp, size_t size)
     MallocMetadata* new_metadata;
     size_t new_block_size;
 
-    if (size <= old_metadata->data_size)
-    {
-        return oldp;
-    }
 
     if (needed_size > MAX_BLOCK_SIZE) // handle with mmap
     {
@@ -465,23 +461,33 @@ void* srealloc(void* oldp, size_t size)
         return newp;
     }
 
-
-    new_block_size = manager.check_max_block_size_after_joins(old_metadata);
-    if (new_block_size > needed_size) // the current block after joins can accomodate
+    new_metadata = old_metadata; // not neccessary
+    MallocMetadata *iter = old_metadata;
+    if (needed_size <= old_metadata->block_size)
     {
-        MallocMetadata* iter = old_metadata;
-        while (iter != NULL){
+        while (iter != NULL)
+        {
+            new_metadata = iter;
+            if ((iter->block_size >> 1) < needed_size)
+                break;
+            iter = manager.split_block(iter);
+        }
+
+        newp = (char *)new_metadata + sizeof(MallocMetadata);
+        return newp;
+
+    } else if ((new_block_size = manager.check_max_block_size_after_joins(old_metadata)) >= needed_size) // the current block after joins can accomodate
+    {
+        while (iter != NULL && needed_size > iter->block_size){
             new_metadata = iter;
             iter = manager.join_block_to_buddy(new_metadata);
-            if (needed_size <= iter->block_size){
-                new_metadata = iter;
-                break;
-            }
         }
+
+        new_metadata = iter == NULL ? new_metadata : iter;
         newp = (char *)new_metadata + sizeof(MallocMetadata);
         std::memmove(newp, oldp, old_metadata->data_size);
         return newp;
-    } else 
+    } else // gets new bin block
     {
         newp = smalloc(size);
         std::memmove(newp, oldp, old_metadata->data_size);
@@ -524,6 +530,7 @@ size_t _size_meta_data()
 int main() {
     // Test 1: Allocate and Free a Small Block (140 bytes)
     void* ptr1 = smalloc(100);  // Needs 140 bytes total (100 + 40 metadata)
+    void* ptr20 = srealloc(ptr1,250);
     assert(ptr1 != nullptr);
     assert(_num_allocated_blocks() == 41); // 41 blocks allocated
     assert(_num_free_blocks() == 40); // 40 blocks free
