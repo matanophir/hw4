@@ -13,11 +13,14 @@
 #define MAX_BLOCK_SIZE MIN_BLOCK_SIZE << MAX_ORDER
 #define TOT_BLOCKS_SIZE 4194304
 
+enum Method {as_smalloc, as_scalloc};
+
 struct MallocMetadata
 {
     size_t data_size;
     size_t block_size; //data_size + sizeof(metadata)
     bool is_free;
+    Method method;
     MallocMetadata *next;
     MallocMetadata *prev;
 
@@ -35,6 +38,7 @@ struct MallocMetadata
         metadata->block_size = block_size;
         metadata->data_size = block_size - sizeof(MallocMetadata);
         metadata->is_free = true;
+        metadata->method = Method::as_smalloc;
         metadata->next = NULL;
         metadata->prev = NULL;
     }
@@ -166,6 +170,7 @@ struct BlockManager{
     {
         MallocMetadata* buddy_metadata;
         bool is_free = metadata->is_free;
+        Method method = metadata->method;
         size_t block_size = metadata->block_size;
         size_t new_block_size = block_size >> 1;
         size_t lvl = _calc_lvl(block_size);
@@ -179,6 +184,7 @@ struct BlockManager{
         buddy_metadata  = _get_buddy(metadata);
         MallocMetadata::metadata_init_block(buddy_metadata,new_block_size);
 
+        metadata->method = method;
         if (is_free == false)
             metadata->is_free = false;
         
@@ -195,6 +201,7 @@ struct BlockManager{
         MallocMetadata* new_metadata;
 
         bool is_free = metadata->is_free;
+        Method method = metadata->method;
         size_t block_size = metadata->block_size;
         size_t new_block_size = metadata->block_size << 1;
         size_t lvl = _calc_lvl(block_size);
@@ -213,6 +220,7 @@ struct BlockManager{
 
         MallocMetadata::metadata_init_block(new_metadata, new_block_size);
 
+        new_metadata->method = method;
         if (is_free == false)
             new_metadata->is_free = false;
 
@@ -357,14 +365,8 @@ struct BlockManager{
 BlockManager manager = BlockManager();
 
 
-
-void* smalloc(size_t size)
+void* _smalloc(size_t size, Method method = Method::as_smalloc)
 {
-    static bool to_alloc = true;
-    if (to_alloc){
-        manager.init();
-        to_alloc = false;
-    }
     
     if (size == 0 || size > MAX_SIZE)
         return NULL;
@@ -375,17 +377,35 @@ void* smalloc(size_t size)
 
     if (needed_size > MAX_BLOCK_SIZE) // handle with mmap
     {
-        metadata_addr = mmap(NULL, needed_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+        if (size >= (1 << 22) && method == Method::as_smalloc ) // 4MB
+        {
+            metadata_addr = mmap(NULL, needed_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+
+        }else if (size >= (1 << 20)  && method == Method::as_scalloc) //2MB
+        {
+            metadata_addr = mmap(NULL, needed_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+
+        }else //regular
+            metadata_addr = mmap(NULL, needed_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
         if (metadata_addr == MAP_FAILED)
             return NULL;
 
         metadata = (MallocMetadata*)metadata_addr;
         MallocMetadata::metadata_init_block(metadata, needed_size);
         metadata->is_free = false;
+        metadata->method = method;
         manager.add_new_block(metadata);
 
         data_addr = (char*)metadata_addr + sizeof(MallocMetadata);
         return data_addr;
+    }
+
+    static bool to_alloc = true;
+    if (to_alloc){
+        manager.init();
+        to_alloc = false;
     }
 
     metadata = manager.find_free_block(needed_size);
@@ -394,6 +414,7 @@ void* smalloc(size_t size)
     
 
     manager.mark_alloc_bin_block(metadata);
+    metadata->method = method;
     
     data_addr = (char*)metadata + sizeof(MallocMetadata);
     return data_addr;
@@ -401,12 +422,17 @@ void* smalloc(size_t size)
 
 void* scalloc(size_t num, size_t size)
 {
-    void* data_addr = smalloc(size*num);
+    void* data_addr = _smalloc(size*num, Method::as_scalloc);
     if (data_addr == NULL)
         return NULL;
     
     std::memset(data_addr, 0, size*num);
     return data_addr;
+}
+
+void* smalloc(size_t size)
+{
+    return _smalloc(size, Method::as_smalloc);
 }
 
 void sfree(void* p)
@@ -438,7 +464,7 @@ void* srealloc(void* oldp, size_t size)
         return NULL;
         
     if (oldp == NULL)
-        return smalloc(size);
+        return _smalloc(size);
 
     void* newp;
     void* old_metadata_addr = (char*)oldp - sizeof(MallocMetadata);
@@ -453,7 +479,7 @@ void* srealloc(void* oldp, size_t size)
         if(old_metadata->block_size == needed_size)
             return oldp;
             
-        newp = smalloc(size);
+        newp = _smalloc(size, old_metadata->method);
         std::memmove(newp, oldp, old_metadata->data_size);
         sfree(oldp);
         return newp;
@@ -492,7 +518,7 @@ void* srealloc(void* oldp, size_t size)
         }
         else // gets new bin block
         {
-            newp = smalloc(size);
+            newp = _smalloc(size, old_metadata->method);
             std::memmove(newp, oldp, old_metadata->data_size);
             sfree(oldp);
             return newp;
