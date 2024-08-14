@@ -76,7 +76,8 @@ TEST_CASE("Huge pages smalloc", "[malloc4]")
     void *base = sbrk(0);
     long long huge_pages_base = get_huge_pages_amount();
 
-    char *a = (char *)smalloc(SMALLOC_HUGE_PAGE_THRESHOLD);
+    // char *a = (char *)smalloc(SMALLOC_HUGE_PAGE_THRESHOLD);
+    char *a = (char *)smalloc(1<<22);
     REQUIRE(a != nullptr);
     verify_blocks(1, SMALLOC_HUGE_PAGE_THRESHOLD, 0, 0);
     verify_size_with_large_blocks(base, 0);

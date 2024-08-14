@@ -3,6 +3,8 @@
 #include <cstring>
 #include <cstdint>
 #include <sys/mman.h>
+#include <fstream>
+#include <string>
 
 #include <iostream>
 #include <cassert>
@@ -255,9 +257,10 @@ struct BlockManager{
 
     private:
 
+
     MallocMetadata* _do_get_buddy(void* addr, size_t block_size)
     {
-        uintptr_t buddy_addr = ((uintptr_t)addr) ^ (block_size); // TODO check that the conversion is valid
+        uintptr_t buddy_addr = ((uintptr_t)addr) ^ (block_size); 
 
         return (MallocMetadata *)buddy_addr;
     }
@@ -364,6 +367,31 @@ struct BlockManager{
 
 BlockManager manager = BlockManager();
 
+long getHugePageSize() {
+    std::ifstream meminfo("/proc/meminfo");
+    std::string line;
+    long size = 0;
+
+    while (std::getline(meminfo, line)) {
+        if (line.find("Hugepagesize:") != std::string::npos) {
+            size_t pos = line.find_first_of("0123456789");
+            if (pos != std::string::npos) {
+                size = std::stol(line.substr(pos)) * 1024;  // Convert from kB to bytes
+            }
+            break;
+        }
+    }
+
+    return size;
+}
+
+size_t _align_size(size_t size, size_t to) {
+    if (size % to == 0)
+        return size;
+
+    size_t add = to - size % to;
+    return size + add;
+}
 
 void* _smalloc(size_t size, Method method = Method::as_smalloc)
 {
@@ -377,13 +405,18 @@ void* _smalloc(size_t size, Method method = Method::as_smalloc)
 
     if (needed_size > MAX_BLOCK_SIZE) // handle with mmap
     {
-
         if (size >= (1 << 22) && method == Method::as_smalloc ) // 4MB
         {
+            size_t hugepage_size = getHugePageSize(); // gonna change hugepage size?
+            needed_size = _align_size(needed_size, hugepage_size); // need to align size for the munmap later
+
             metadata_addr = mmap(NULL, needed_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
 
-        }else if (size >= (1 << 20)  && method == Method::as_scalloc) //2MB
+        }else if (size > (1 << 20)  && method == Method::as_scalloc) //2MB
         {
+            size_t hugepage_size = getHugePageSize(); 
+            needed_size = _align_size(needed_size, hugepage_size); // need to align size for the munmap later
+            
             metadata_addr = mmap(NULL, needed_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
 
         }else //regular

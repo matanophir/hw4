@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "cstring": "cpp",
-        "cmath": "cpp"
+        "cmath": "cpp",
+        "*.tcc": "cpp"
     }
 }
