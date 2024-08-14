@@ -37,8 +37,7 @@ catch_discover_tests(malloc_3_test TEST_PREFIX malloc_3.)
 target_compile_options(malloc_3_test PRIVATE -Wall PRIVATE -pedantic-errors PRIVATE -Werror)
 
 if(EXISTS ${SOURCE_DIR}/malloc_4.cpp)
-    add_executable(malloc_4_test
-        malloc_3_test_basic.cpp malloc_3_test_reuse.cpp
+    add_executable(malloc_4_test malloc_3_test_basic.cpp malloc_3_test_reuse.cpp
         malloc_3_test_scalloc.cpp malloc_3_test_split_and_merge.cpp
         malloc_3_test_srealloc.cpp malloc_3_test_srealloc_cases.cpp
         malloc_4_test.cpp

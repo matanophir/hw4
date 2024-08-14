@@ -17,7 +17,7 @@ using namespace std;
 #define SHELLSCRIPT "\
 #/bin/bash \n\
 echo  \"---------------------------------------------------\" \n\
-cat /sys/devices/system/node/node*/meminfo | fgrep HugePages_ \
+cat /proc/meminfo | fgrep HugePages_ \
 "
 
 
@@ -35,7 +35,7 @@ string exec(const char* cmd) {
 }
 
 int getfreepages(){
-    string commandres=exec("cat /sys/devices/system/node/node*/meminfo | fgrep HugePages_Free");
+    string commandres=exec("cat /proc/meminfo | fgrep HugePages_Free");
     cout<<endl<<commandres<<endl;
     commandres=commandres.substr(commandres.find_first_of(':')+1);
 
@@ -141,7 +141,7 @@ int main(){
 
 
      //system(SHELLSCRIPT);
-     ptr=scalloc(10,MB);//shouldnt make huge pages
+     ptr=scalloc(100,MB);//shouldnt make huge pages
     cout<<"---------------------------------------------------\n";
      cout<<"|| 0 PAGES ALOC                                  ||"<<endl;
         cout<<"---------------------------------------------------\n";

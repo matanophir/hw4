@@ -10,8 +10,8 @@
 #define MAX_SIZE 100000000
 #define MAX_ORDER 10
 #define MIN_BLOCK_SIZE 128
-#define MAX_BLOCK_SIZE MIN_BLOCK_SIZE << MAX_ORDER
-#define TOT_BLOCKS_SIZE 4194304
+#define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE << MAX_ORDER)
+#define TOT_BLOCKS_SIZE (32*MAX_BLOCK_SIZE)
 
 struct MallocMetadata
 {
@@ -64,10 +64,9 @@ struct BlockManager{
     void init()
     {
         void *current_brk;
-        size_t to_align, max_block_size;
+        size_t to_align;
         MallocMetadata* metadata;
 
-        max_block_size = MIN_BLOCK_SIZE << MAX_ORDER;
 
         current_brk = sbrk(0); // Get current break
 
@@ -77,15 +76,15 @@ struct BlockManager{
             sbrk(to_align);
 
         current_brk = sbrk(TOT_BLOCKS_SIZE);
-        to_align = (uintptr_t)current_brk % TOT_BLOCKS_SIZE;
+        to_align = (uintptr_t)current_brk % TOT_BLOCKS_SIZE; //just to see its 0
 
         for (size_t i = 0; i < 32; i++)
         {
             metadata = (MallocMetadata*)current_brk;
-            MallocMetadata::metadata_init_block(metadata, max_block_size);
+            MallocMetadata::metadata_init_block(metadata, MAX_BLOCK_SIZE);
             add_new_block(metadata);
 
-            current_brk = (char*)current_brk + max_block_size;
+            current_brk = (char*)current_brk + MAX_BLOCK_SIZE;
         }
     }
 
@@ -205,7 +204,7 @@ struct BlockManager{
         buddy_metadata = _get_buddy(metadata);
         new_metadata = buddy_metadata > metadata ? metadata : buddy_metadata;
 
-        if (buddy_metadata->is_free == false) //can't join
+        if (_check_if_free(buddy_metadata, block_size) == false)
             return NULL;
 
         delete_block(metadata);
@@ -226,19 +225,17 @@ struct BlockManager{
         MallocMetadata* buddy_metadata;
         MallocMetadata* new_metadata = metadata;
 
-        size_t max_block_size = metadata->block_size;
-        size_t new_block_size = max_block_size;
+        size_t new_block_size = metadata->block_size;
 
         while (true)
         {
             size_t lvl = _calc_lvl(new_block_size);
             buddy_metadata = _do_get_buddy(new_metadata, new_block_size);
-        if (lvl > MAX_ORDER || buddy_metadata->is_free == false) //can't join
+        if (lvl >= MAX_ORDER || (_check_if_free(buddy_metadata,new_block_size ) == false)) //can't join
         {
-            return max_block_size;
+            return new_block_size;
         }
 
-            max_block_size = new_block_size;
             new_metadata = buddy_metadata > new_metadata ? new_metadata : buddy_metadata;
             new_block_size <<= 1;
         }
@@ -349,6 +346,19 @@ struct BlockManager{
         --num_allocated_blocks;
         num_allocated_bytes -= metadata->data_size;
         num_meta_data_bytes -= sizeof(MallocMetadata);
+    }
+
+    bool _check_if_free(MallocMetadata* block, size_t expected_block_size)
+    {
+        if(block->block_size == expected_block_size){
+            return block->is_free;
+        }else{ // can only be lower than expected..
+            size_t new_expected_size = expected_block_size >> 1;
+            MallocMetadata* buddy = _do_get_buddy(block,new_expected_size);
+            return _check_if_free(block, new_expected_size) && _check_if_free(buddy,new_expected_size);
+        }
+        
+
     }
 
 
