@@ -401,7 +401,7 @@ size_t _align_size(size_t size, size_t to) {
     return size + add;
 }
 
-void* _smalloc(size_t size, Method method = Method::as_smalloc)
+void* _smalloc(size_t size, Method method = Method::as_smalloc, size_t calloc_block_size = 0 )
 {
     
     if (size == 0 || size > MAX_SIZE)
@@ -420,7 +420,7 @@ void* _smalloc(size_t size, Method method = Method::as_smalloc)
 
             metadata_addr = mmap(NULL, needed_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
 
-        }else if (size > (1 << 20)  && method == Method::as_scalloc) //2MB
+        }else if (calloc_block_size > (1 << 20)  && method == Method::as_scalloc) //2MB
         {
             size_t hugepage_size = getHugePageSize(); 
             needed_size = _align_size(needed_size, hugepage_size); // need to align size for the munmap later
@@ -463,7 +463,7 @@ void* _smalloc(size_t size, Method method = Method::as_smalloc)
 
 void* scalloc(size_t num, size_t size)
 {
-    void* data_addr = _smalloc(size*num, Method::as_scalloc);
+    void* data_addr = _smalloc(size*num, Method::as_scalloc, size);
     if (data_addr == NULL)
         return NULL;
     
@@ -520,7 +520,7 @@ void* srealloc(void* oldp, size_t size)
         if(old_metadata->block_size == needed_size)
             return oldp;
             
-        newp = _smalloc(size, old_metadata->method);
+        newp = _smalloc(size, old_metadata->method, size); //TODO if was originally calloced then the new size is the size of the block?
         std::memmove(newp, oldp, old_metadata->data_size);
         sfree(oldp);
         return newp;

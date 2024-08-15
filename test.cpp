@@ -141,7 +141,7 @@ int main(){
 
 
      //system(SHELLSCRIPT);
-     ptr=scalloc(100,MB);//shouldnt make huge pages
+     ptr=scalloc(10,MB);//shouldnt make huge pages
     cout<<"---------------------------------------------------\n";
      cout<<"|| 0 PAGES ALOC                                  ||"<<endl;
         cout<<"---------------------------------------------------\n";

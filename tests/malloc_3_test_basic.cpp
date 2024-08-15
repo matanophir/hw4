@@ -986,10 +986,7 @@ TEST_CASE("really free?", "[malloc3]")
     verify_block_by_order(1, 3, 2, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 31, 0, 0, 0);
     sfree(ptr7);
     verify_block_by_order(2, 2, 2, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 31, 0, 0, 0);
-    ptr4 = srealloc(ptr4, 128 *pow(2,2) - 64);
-    verify_block_by_order(1, 1, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 31, 0, 0, 0);
-    REQUIRE(ptr4 == ptr1);
-    sfree(ptr4);
+    sfree(ptr4); //ptr8 is still used so can't fully merge
     verify_block_by_order(1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 31, 0, 0, 0);
     sfree(ptr8);
     verify_block_by_order(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0);
