@@ -404,6 +404,12 @@ size_t _align_size(size_t size, size_t to) {
 void* _smalloc(size_t size, Method method = Method::as_smalloc, size_t calloc_block_size = 0 )
 {
     
+    static bool to_alloc = true;
+    if (to_alloc){
+        manager.init();
+        to_alloc = false;
+    }
+
     if (size == 0 || size > MAX_SIZE)
         return NULL;
     
@@ -441,12 +447,6 @@ void* _smalloc(size_t size, Method method = Method::as_smalloc, size_t calloc_bl
 
         data_addr = (char*)metadata_addr + sizeof(MallocMetadata);
         return data_addr;
-    }
-
-    static bool to_alloc = true;
-    if (to_alloc){
-        manager.init();
-        to_alloc = false;
     }
 
     metadata = manager.find_free_block(needed_size);
